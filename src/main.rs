@@ -1,5 +1,6 @@
 use std::net::UdpSocket;
 use std::io::Result;
+use std::collections::HashMap;
 
 // DNS Header structure
 #[derive(Debug)]
@@ -128,13 +129,44 @@ fn parse_question(buffer: &[u8], offset: &mut usize) -> Option<DnsQuestion> {
 }
 
 // Create DNS response
-fn create_response(query_buffer: &[u8], query_len: usize) -> Option<Vec<u8>> {
+fn create_response(query_buffer: &[u8], _query_len: usize, records: &HashMap<String, [u8; 4]>) -> Option<Vec<u8>> {
     let header = DnsHeader::parse(query_buffer)?;
 
     let mut offset = 12;
     let question = parse_question(query_buffer, &mut offset)?;
 
     println!("Received query for: {} (type: {})", question.name, question.qtype);
+
+    // Only handle A records (type 1)
+    if question.qtype != 1 {
+        println!("  -> Query type not supported (only A records)");
+        return None;
+    }
+
+    // Look up the IP address for the domain
+    let ip_address = if let Some(ip) = records.get(&question.name) {
+        println!("  -> Found A record: {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
+        *ip
+    } else {
+        println!("  -> Domain not found, returning NXDOMAIN");
+        // Return NXDOMAIN (name error)
+        let response_header = DnsHeader {
+            id: header.id,
+            flags: 0x8183, // Response with NXDOMAIN error
+            question_count: 1,
+            answer_count: 0,
+            authority_count: 0,
+            additional_count: 0,
+        };
+
+        let mut response = response_header.to_bytes();
+        let name_bytes = encode_domain_name(&question.name);
+        response.extend_from_slice(&name_bytes);
+        response.extend_from_slice(&question.qtype.to_be_bytes());
+        response.extend_from_slice(&question.qclass.to_be_bytes());
+
+        return Some(response);
+    };
 
     // Create response header
     let response_header = DnsHeader {
@@ -154,7 +186,7 @@ fn create_response(query_buffer: &[u8], query_len: usize) -> Option<Vec<u8>> {
     response.extend_from_slice(&question.qtype.to_be_bytes());
     response.extend_from_slice(&question.qclass.to_be_bytes());
 
-    // Add answer section (A record pointing to 127.0.0.1)
+    // Add answer section (A record)
     // Name (pointer to question)
     response.push(0xC0);
     response.push(0x0C);
@@ -171,22 +203,35 @@ fn create_response(query_buffer: &[u8], query_len: usize) -> Option<Vec<u8>> {
     // Data length (4 bytes for IPv4)
     response.extend_from_slice(&4u16.to_be_bytes());
 
-    // IP address (127.0.0.1 for demo)
-    response.extend_from_slice(&[127, 0, 0, 1]);
+    // IP address from our records
+    response.extend_from_slice(&ip_address);
 
     Some(response)
 }
 
 fn main() -> Result<()> {
-    println!("Starting DNS Server on 0.0.0.0:5353");
+    println!("Starting DNS Server on 0.0.0.0:53000");
     println!("Press Ctrl+C to stop");
     println!("---");
 
-    let socket = UdpSocket::bind("0.0.0.0:5353")?;
+    // Configure A records (domain -> IP address mapping)
+    let mut records: HashMap<String, [u8; 4]> = HashMap::new();
+    records.insert("example.com".to_string(), [93, 184, 216, 34]);  // example.com -> 93.184.216.34
+    records.insert("test.local".to_string(), [192, 168, 1, 100]);    // test.local -> 192.168.1.100
+    records.insert("myserver.local".to_string(), [10, 0, 0, 50]);    // myserver.local -> 10.0.0.50
+    records.insert("localhost".to_string(), [127, 0, 0, 1]);         // localhost -> 127.0.0.1
+
+    println!("Configured A records:");
+    for (domain, ip) in &records {
+        println!("  {} -> {}.{}.{}.{}", domain, ip[0], ip[1], ip[2], ip[3]);
+    }
+    println!("---");
+
+    let socket = UdpSocket::bind("0.0.0.0:53000")?;
     let mut buffer = [0u8; 512];
 
     println!("DNS Server is ready to receive queries");
-    println!("Test with: dig @127.0.0.1 -p 5353 example.com");
+    println!("Test with: dig @127.0.0.1 -p 53000 example.com");
     println!("---");
 
     loop {
@@ -194,7 +239,7 @@ fn main() -> Result<()> {
             Ok((size, source)) => {
                 println!("\nReceived {} bytes from {}", size, source);
 
-                if let Some(response) = create_response(&buffer, size) {
+                if let Some(response) = create_response(&buffer, size, &records) {
                     match socket.send_to(&response, source) {
                         Ok(_) => println!("Sent response to {}", source),
                         Err(e) => eprintln!("Failed to send response: {}", e),
