@@ -210,7 +210,7 @@ fn create_response(query_buffer: &[u8], _query_len: usize, records: &HashMap<Str
 }
 
 fn main() -> Result<()> {
-    println!("Starting DNS Server on 0.0.0.0:53000");
+    println!("Starting DNS Server on 0.0.0.0:5353");
     println!("Press Ctrl+C to stop");
     println!("---");
 
@@ -227,11 +227,11 @@ fn main() -> Result<()> {
     }
     println!("---");
 
-    let socket = UdpSocket::bind("0.0.0.0:53000")?;
+    let socket = UdpSocket::bind("0.0.0.0:5353")?;
     let mut buffer = [0u8; 512];
 
     println!("DNS Server is ready to receive queries");
-    println!("Test with: dig @127.0.0.1 -p 53000 example.com");
+    println!("Test with: dig @127.0.0.1 -p 5353 example.com");
     println!("---");
 
     loop {
